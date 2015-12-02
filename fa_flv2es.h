@@ -31,22 +31,31 @@
 #include <stdlib.h>
 #include <string.h>
 
+//#pragma pack (1)
+
 #define DATA_MAX_FRAME_SIZE         (1000*1024)
 
-/*
-typedef struct _TS_packet_header
+typedef struct adts_header_info
 {
-    unsigned sync_byte                        : 8;
-    unsigned transport_error_indicator        : 1;
-    unsigned payload_unit_start_indicator     : 1;
-    unsigned transport_priority               : 1;
-    unsigned PID                              : 13;
-    unsigned transport_scrambling_control     : 2;
-    unsigned adaption_field_control           : 2;
-    unsigned continuity_counter               : 4;
-} TS_packet_header;
-*/
- 
+    unsigned syncword                           : 12;
+    unsigned ID                                 : 1;
+    unsigned layer                              : 2;
+    unsigned protection_absent                  : 1;
+    unsigned profile_ObjectType                 : 2;
+    unsigned sampling_frequency_index           : 4;
+    unsigned private_bit                        : 1;
+    unsigned channel_configuration              : 3;
+    unsigned original_copy                      : 1;
+    unsigned home                               : 1;
+
+    unsigned copyright_identification_bit       : 1;
+    unsigned copyright_identification_start     : 1;
+    unsigned aac_frame_length                   : 13;
+    unsigned adts_buffer_fullness               : 11;
+    unsigned number_of_raw_data_blocks_in_frame : 2;
+    
+} adts_header_info;
+
 
 typedef enum
 {
@@ -115,6 +124,7 @@ typedef struct flv_demux_struc
 
 extern flv_demux_struc flvdemux;
 
+//#pragma pack ()
 
  #endif
 

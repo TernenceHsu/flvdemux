@@ -27,6 +27,9 @@
 #include "fa_flv2es.h"
 
 #define FLV_TAG_HEADER_SIZE             (11)
+#define ADTS_HEADER_SIZE                (7)
+#define FLV_FILE_HEADER_SIZE            (9)
+#define ADTS_MAX_FRAME_BYTES            ((1 << 13) - 1)
 
 flv_demux_struc flvdemux;
 
@@ -50,7 +53,7 @@ int flv_demux_deinit(flv_demux_struc *flvdemux)
 int parse_flv_file_header(char * header_buf)
 {
 
-#define FLV_FILE_HEADER_SIZE    9
+
     
     int header_length;
 
@@ -101,11 +104,46 @@ int parse_flv_tag_header(char * header_buf)
 }
 
 
+int adts_write_frame_header_buf(char * buf,adts_header_info  *adts_header_data)
+{
+    int i = 0;
+
+    if (adts_header_data->adts_buffer_fullness > ADTS_MAX_FRAME_BYTES)
+    {
+        printf("ADTS frame size too large: %u (max %d)\n",adts_header_data->adts_buffer_fullness,ADTS_MAX_FRAME_BYTES);
+        return -1;
+    }
+
+    buf[i++] = adts_header_data->syncword >> 4 & 0xff;
+    buf[i++] = (adts_header_data->syncword & 0xf) << 4 |
+                (adts_header_data->ID &0x1) << 3 | 
+                (adts_header_data->layer &0x3) << 1 | 
+                (adts_header_data->protection_absent &0x1);
+    buf[i++] = (adts_header_data->profile_ObjectType & 0x3) << 6 |
+                (adts_header_data->sampling_frequency_index &0xf) << 2 | 
+                (adts_header_data->private_bit &0x1) << 1 | 
+                (adts_header_data->channel_configuration &0x11)  >> 2;
+    buf[i++] = ((adts_header_data->channel_configuration & 0x3) << 6 |
+                adts_header_data->original_copy << 5 | 
+                adts_header_data->home << 4 | 
+                adts_header_data->copyright_identification_bit << 3 |
+                adts_header_data->copyright_identification_start << 2 |
+                adts_header_data->aac_frame_length >> 11 ) &0xff;
+    buf[i++] = adts_header_data->aac_frame_length >> 3 & 0xff;
+    buf[i++] = (adts_header_data->aac_frame_length << 5 |
+                adts_header_data->adts_buffer_fullness >> 6) & 0xff;
+    buf[i++] = (adts_header_data->adts_buffer_fullness << 2 |
+                adts_header_data->number_of_raw_data_blocks_in_frame ) & 0xff;
+
+    return 0;
+}
+
 int main(int argc,char * argv[])
 {
-
     int ret = 0;
 	signed char buffer[1024];
+    adts_header_info  adts_header_data;
+    char adts_header_buf[ADTS_HEADER_SIZE];
 
 	FILE * fp_sourcefile = NULL;
 	FILE * fp_video_destfile = NULL;
@@ -148,6 +186,26 @@ int main(int argc,char * argv[])
     	return 0;
     }
 
+
+    // init adts_header_info
+    adts_header_data.syncword = 0xfff;
+    adts_header_data.ID = 0;
+    adts_header_data.layer = 0;
+    adts_header_data.protection_absent = 1;
+
+    adts_header_data.private_bit = 0;
+    adts_header_data.original_copy = 0;
+    adts_header_data.home = 0;
+    adts_header_data.copyright_identification_bit = 0;
+    adts_header_data.copyright_identification_start = 0;
+    adts_header_data.number_of_raw_data_blocks_in_frame = 0;
+
+    //The dynamic parameters
+    adts_header_data.profile_ObjectType = 1;
+    adts_header_data.sampling_frequency_index = 4;
+    adts_header_data.channel_configuration = 2;
+    adts_header_data.adts_buffer_fullness = 0x7ff;
+
     while(1)
     {
 
@@ -172,11 +230,16 @@ int main(int argc,char * argv[])
 
         if(flvdemux.enable_audio && (flvdemux.flv_tag.tag_type == TAG_AUDIO))
         {
-            fwrite(flvdemux.flv_tag.data,flvdemux.flv_tag.date_size,1,fp_audio_destfile);
+            if(flvdemux.flv_tag.data[1] == 0x01)  // 0x00 Synchronous data, 0x01 raw data
+            {
+                adts_header_data.aac_frame_length = flvdemux.flv_tag.date_size + 5;
+                adts_write_frame_header_buf(adts_header_buf,&adts_header_data);
+                fwrite(adts_header_buf,7,1,fp_audio_destfile);
+                fwrite(flvdemux.flv_tag.data+2,flvdemux.flv_tag.date_size-2,1,fp_audio_destfile);
+            }
         }
         else if(flvdemux.enable_video && (flvdemux.flv_tag.tag_type == TAG_VIDEO))
         {
-            
             flvdemux.flv_tag.video_data.frame_type = flvdemux.flv_tag.data[0] >> 4;
             flvdemux.flv_tag.video_data.codec_id = flvdemux.flv_tag.data[0] & 0xF;
             flvdemux.flv_tag.video_data.AVCPacketType = flvdemux.flv_tag.data[1];
@@ -216,6 +279,12 @@ int main(int argc,char * argv[])
                 fwrite(flvdemux.flv_tag.data+5,flvdemux.flv_tag.video_data.valid_data_size+4,1,fp_video_destfile);
             }
             
+        }
+        else if(flvdemux.flv_tag.tag_type == TAG_SCRIPT)
+        {
+
+
+
         }
 
         // check previous tag size
