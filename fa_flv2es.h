@@ -97,6 +97,26 @@ typedef struct flv_video_data
     int valid_data_size;
 }flv_video_data;
 
+
+/*
+ * In the ISO/IEC 14496-15 avc encapsulation are defined
+ * AVC decoder configuration record
+ */
+typedef struct AVCDecoderConfigurationRecord
+{
+    int configurationVersion;
+    int AVCProfileIndication;
+    int profile_compatibility;
+    int AVCLevelIndication;
+    int lengthSizeMinusOne;
+    int numOfSequenceParameterSets;
+    int sequenceParameterSetLength;
+    int numOfPictureParameterSets;
+    int pictureParameterSetLength;
+}AVCDecoderConfigurationRecord;
+
+
+
 typedef struct flv_tag_struc
 {
     int tag_type;

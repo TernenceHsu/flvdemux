@@ -141,9 +141,14 @@ int adts_write_frame_header_buf(char * buf,adts_header_info  *adts_header_data)
 int main(int argc,char * argv[])
 {
     int ret = 0;
+    int i = 0,num = 0;
 	signed char buffer[1024];
-    adts_header_info  adts_header_data;
+    char sequence_buf[1024] = "";
     char adts_header_buf[ADTS_HEADER_SIZE];
+    adts_header_info  adts_header_data;
+    AVCDecoderConfigurationRecord avc_config_data;
+
+    char length_a,length_b;
 
 	FILE * fp_sourcefile = NULL;
 	FILE * fp_video_destfile = NULL;
@@ -240,22 +245,18 @@ int main(int argc,char * argv[])
         }
         else if(flvdemux.enable_video && (flvdemux.flv_tag.tag_type == TAG_VIDEO))
         {
-            flvdemux.flv_tag.video_data.frame_type = flvdemux.flv_tag.data[0] >> 4;
-            flvdemux.flv_tag.video_data.codec_id = flvdemux.flv_tag.data[0] & 0xF;
-            flvdemux.flv_tag.video_data.AVCPacketType = flvdemux.flv_tag.data[1];
-            flvdemux.flv_tag.video_data.CompositionTime = (flvdemux.flv_tag.data[2] & 0xFF) << 16
-                                                        | (flvdemux.flv_tag.data[3] & 0xFF) << 8
-                                                        | (flvdemux.flv_tag.data[4] & 0xFF);
-
-            flvdemux.flv_tag.video_data.valid_data_size = (flvdemux.flv_tag.data[5] & 0xFF) << 24
-                                                      | (flvdemux.flv_tag.data[6] & 0xFF) << 16
-                                                      | (flvdemux.flv_tag.data[7] & 0xFF) << 8
-                                                      | (flvdemux.flv_tag.data[8] & 0xFF);
-
+            i = 0;
+            flvdemux.flv_tag.video_data.frame_type = flvdemux.flv_tag.data[i] >> 4;
+            flvdemux.flv_tag.video_data.codec_id = flvdemux.flv_tag.data[i++] & 0xF;
+            flvdemux.flv_tag.video_data.AVCPacketType = flvdemux.flv_tag.data[i++];
+            flvdemux.flv_tag.video_data.CompositionTime = (flvdemux.flv_tag.data[i++] & 0xFF) << 16
+                                                        | (flvdemux.flv_tag.data[i++] & 0xFF) << 8
+                                                        | (flvdemux.flv_tag.data[i++] & 0xFF);
+            // use i++ CompositionTime will error
 
             if(flvdemux.flv_tag.video_data.codec_id != 0x07 )
             {
-                printf("not h264 data \n");
+                printf("FLV format video coding is not avc, unable to properly parse !!! \n");
                 return 0;
             }
 
@@ -264,21 +265,62 @@ int main(int argc,char * argv[])
                 flvdemux.flv_tag.video_data.AVCPacketType == 0 &&
                 flvdemux.flv_tag.video_data.CompositionTime == 0)
             {
-                printf("test ####\n");
+                //AVC sequence header , sps and pps
+                avc_config_data.configurationVersion = flvdemux.flv_tag.data[i++];
+                avc_config_data.AVCProfileIndication = flvdemux.flv_tag.data[i++];
+                avc_config_data.profile_compatibility = flvdemux.flv_tag.data[i++];
+                avc_config_data.AVCLevelIndication = flvdemux.flv_tag.data[i++];
+                avc_config_data.lengthSizeMinusOne = flvdemux.flv_tag.data[i++] & 0x3;
 
+                avc_config_data.numOfSequenceParameterSets = flvdemux.flv_tag.data[i++] & 0x1f;
+                for(num = 0;num < avc_config_data.numOfSequenceParameterSets;num++)
+                {
+                    length_a = flvdemux.flv_tag.data[i++];
+                    length_b = flvdemux.flv_tag.data[i++];
+                    avc_config_data.sequenceParameterSetLength = (length_a << 8 ) | length_b;
+                    sequence_buf[0] = 0x00;
+                    sequence_buf[1] = 0x00;
+                    sequence_buf[2] = 0x00;
+                    sequence_buf[3] = 0x01;
+                    memcpy(sequence_buf+4,flvdemux.flv_tag.data+i,avc_config_data.sequenceParameterSetLength);
+                    fwrite(sequence_buf,avc_config_data.sequenceParameterSetLength+4,1,fp_video_destfile);
+                    i+=avc_config_data.sequenceParameterSetLength;
+                }
 
+                avc_config_data.numOfPictureParameterSets = flvdemux.flv_tag.data[i++] & 0xff;
+                for(num = 0;num < avc_config_data.numOfPictureParameterSets;num++)
+                {
+                    length_a = flvdemux.flv_tag.data[i++];
+                    length_b = flvdemux.flv_tag.data[i++];
+                    avc_config_data.pictureParameterSetLength = (length_a << 8 ) | length_b;
+                    sequence_buf[0] = 0x00;
+                    sequence_buf[1] = 0x00;
+                    sequence_buf[2] = 0x00;
+                    sequence_buf[3] = 0x01;
+                    memcpy(sequence_buf+4,flvdemux.flv_tag.data+i,avc_config_data.pictureParameterSetLength);
+                    fwrite(sequence_buf,avc_config_data.pictureParameterSetLength+4,1,fp_video_destfile);
+                    i+=avc_config_data.sequenceParameterSetLength;
+                }
             }
-
-            if(flvdemux.flv_tag.video_data.valid_data_size > 1000*1024){
-                fwrite(flvdemux.flv_tag.data,flvdemux.flv_tag.date_size,1,fp_video_destfile);
-            }else{
-                flvdemux.flv_tag.data[5] = 0x00;
-                flvdemux.flv_tag.data[6] = 0x00;
-                flvdemux.flv_tag.data[7] = 0x00;
-                flvdemux.flv_tag.data[8] = 0x01;
-                fwrite(flvdemux.flv_tag.data+5,flvdemux.flv_tag.video_data.valid_data_size+4,1,fp_video_destfile);
+            //else if(flvdemux.flv_tag.video_data.frame_type == 1 && 
+            //    flvdemux.flv_tag.video_data.codec_id == 7)
+            else
+            {
+                flvdemux.flv_tag.video_data.valid_data_size = (flvdemux.flv_tag.data[5] & 0xFF) << 24
+                                                          | (flvdemux.flv_tag.data[6] & 0xFF) << 16
+                                                          | (flvdemux.flv_tag.data[7] & 0xFF) << 8
+                                                          | (flvdemux.flv_tag.data[8] & 0xFF);
+                
+                if(flvdemux.flv_tag.video_data.valid_data_size > 1000*1024){
+                    fwrite(flvdemux.flv_tag.data,flvdemux.flv_tag.date_size,1,fp_video_destfile);
+                }else{
+                    flvdemux.flv_tag.data[5] = 0x00;
+                    flvdemux.flv_tag.data[6] = 0x00;
+                    flvdemux.flv_tag.data[7] = 0x00;
+                    flvdemux.flv_tag.data[8] = 0x01;
+                    fwrite(flvdemux.flv_tag.data+5,flvdemux.flv_tag.video_data.valid_data_size+4,1,fp_video_destfile);
+                }
             }
-            
         }
         else if(flvdemux.flv_tag.tag_type == TAG_SCRIPT)
         {
