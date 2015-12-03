@@ -1,6 +1,6 @@
 /*
 
-  Copyright (C) 2013 xubinbin Ðì±ò±ò (Beijing China)
+  Copyright (C) 2015 xubinbin Ðì±ò±ò (Beijing China)
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
@@ -18,9 +18,9 @@
   
   filename: fa_ts2es.h 
   version : v1.1.0
-  time    : 2013/08/02 16:20
+  time    : 2015/12/03 16:20
   author  : xubinbin ( ternence.hsu@foxmail.com )
-  code URL: http://code.google.com/p/tsdemux/
+  code URL: http://code.google.com/p/flvdemux/
   
 */
 
@@ -30,10 +30,103 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-//#pragma pack (1)
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 #define DATA_MAX_FRAME_SIZE         (1000*1024)
+#define FLV_TAG_HEADER_SIZE             (11)
+#define ADTS_HEADER_SIZE                (7)
+#define FLV_FILE_HEADER_SIZE            (9)
+#define ADTS_MAX_FRAME_BYTES            ((1 << 13) - 1)
+
+typedef unsigned long long          uint64_t;
+
+enum {
+    FLV_HEADER_FLAG_HASVIDEO = 1,
+    FLV_HEADER_FLAG_HASAUDIO = 4,
+};
+
+enum {
+    FLV_TAG_TYPE_AUDIO = 0x08,
+    FLV_TAG_TYPE_VIDEO = 0x09,
+    FLV_TAG_TYPE_META  = 0x12,
+};
+
+enum {
+    FLV_STREAM_TYPE_VIDEO,
+    FLV_STREAM_TYPE_AUDIO,
+    FLV_STREAM_TYPE_DATA,
+    FLV_STREAM_TYPE_NB,
+};
+
+enum {
+    FLV_MONO   = 0,
+    FLV_STEREO = 1,
+};
+
+enum {
+    FLV_SAMPLESSIZE_8BIT  = 0,
+    FLV_SAMPLESSIZE_16BIT = 1,
+};
+
+enum {
+    FLV_SAMPLERATE_SPECIAL = 0, /**< signifies 5512Hz and 8000Hz in the case of NELLYMOSER */
+    FLV_SAMPLERATE_11025HZ = 1,
+    FLV_SAMPLERATE_22050HZ = 2,
+    FLV_SAMPLERATE_44100HZ = 3,
+};
+
+enum {
+    FLV_CODECID_PCM                  = 0,
+    FLV_CODECID_ADPCM                = 1,
+    FLV_CODECID_MP3                  = 2,
+    FLV_CODECID_PCM_LE               = 3,
+    FLV_CODECID_NELLYMOSER_16KHZ_MONO = 4,
+    FLV_CODECID_NELLYMOSER_8KHZ_MONO = 5,
+    FLV_CODECID_NELLYMOSER           = 6,
+    FLV_CODECID_PCM_ALAW             = 7,
+    FLV_CODECID_PCM_MULAW            = 8,
+    FLV_CODECID_AAC                  = 10,
+    FLV_CODECID_SPEEX                = 11,
+};
+
+enum {
+    FLV_CODECID_H263    = 2,
+    FLV_CODECID_SCREEN  = 3,
+    FLV_CODECID_VP6     = 4,
+    FLV_CODECID_VP6A    = 5,
+    FLV_CODECID_SCREEN2 = 6,
+    FLV_CODECID_H264    = 7,
+    FLV_CODECID_REALH263= 8,
+    FLV_CODECID_MPEG4   = 9,
+};
+
+enum {
+    FLV_FRAME_KEY            = 1, ///< key frame (for AVC, a seekable frame)
+    FLV_FRAME_INTER          = 2, ///< inter frame (for AVC, a non-seekable frame)
+    FLV_FRAME_DISP_INTER     = 3, ///< disposable inter frame (H.263 only)
+    FLV_FRAME_GENERATED_KEY  = 4, ///< generated key frame (reserved for server use only)
+    FLV_FRAME_VIDEO_INFO_CMD = 5, ///< video info/command frame
+};
+
+typedef enum {
+    AMF_DATA_TYPE_NUMBER      = 0x00,
+    AMF_DATA_TYPE_BOOL        = 0x01,
+    AMF_DATA_TYPE_STRING      = 0x02,
+    AMF_DATA_TYPE_OBJECT      = 0x03,
+    AMF_DATA_TYPE_NULL        = 0x05,
+    AMF_DATA_TYPE_UNDEFINED   = 0x06,
+    AMF_DATA_TYPE_REFERENCE   = 0x07,
+    AMF_DATA_TYPE_MIXEDARRAY  = 0x08,
+    AMF_DATA_TYPE_OBJECT_END  = 0x09,
+    AMF_DATA_TYPE_ARRAY       = 0x0a,
+    AMF_DATA_TYPE_DATE        = 0x0b,
+    AMF_DATA_TYPE_LONG_STRING = 0x0c,
+    AMF_DATA_TYPE_UNSUPPORTED = 0x0d,
+} AMFDataType;
 
 typedef struct adts_header_info
 {
@@ -57,36 +150,14 @@ typedef struct adts_header_info
 } adts_header_info;
 
 
-typedef enum
+typedef struct AudioTagHeader
 {
-    Linear_PCM_P            = 0,
-    ADPCM                   = 1,
-    MP3                     = 2,
-    Linear_PCM_L            = 3,
-    Nellymoser_16K_mono     = 4,
-    Nellymoser_8K_mono      = 5,
-    Nellymoser              = 6,
-    G711A                   = 7,
-    G711U                   = 8,
-    reserved                = 9,
-    AAC                     = 10,
-    SPEEX                   = 11,
-    MP3_8K                  = 14,
-    Device_specific_sound   = 15,
-} FLV_SOUND_FORMAT;
-
-typedef enum
-{
-    TAG_AUDIO               = 8,
-    TAG_VIDEO               = 9,
-    TAG_SCRIPT              = 18,
-} FLV_TAG_TYPE;
-
-
-typedef struct flv_audio_data
-{
-
-}flv_audio_data;
+    int SoundFormat;
+    int SoundRate;
+    int SoundSize;
+    int SoundType;
+    int AACPacketType;
+}AudioTagHeader;
 
 typedef struct flv_video_data
 {
@@ -128,7 +199,7 @@ typedef struct flv_tag_struc
     int previous_tag_size;
 
     flv_video_data video_data;
-    flv_audio_data audio_data;
+    AudioTagHeader audio_data;
     
 }flv_tag_struc;
 
@@ -144,7 +215,7 @@ typedef struct flv_demux_struc
 
 extern flv_demux_struc flvdemux;
 
-//#pragma pack ()
+int do_tag_onMetaData(char * meta_buf, int size);
+int adts_write_frame_header_buf(char * buf,adts_header_info  *adts_header_data);
 
- #endif
-
+#endif

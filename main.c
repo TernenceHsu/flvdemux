@@ -26,11 +26,6 @@
 #include "fa_parseopt.h"
 #include "fa_flv2es.h"
 
-#define FLV_TAG_HEADER_SIZE             (11)
-#define ADTS_HEADER_SIZE                (7)
-#define FLV_FILE_HEADER_SIZE            (9)
-#define ADTS_MAX_FRAME_BYTES            ((1 << 13) - 1)
-
 flv_demux_struc flvdemux;
 
 int flv_demux_init(flv_demux_struc *flvdemux)
@@ -52,9 +47,6 @@ int flv_demux_deinit(flv_demux_struc *flvdemux)
 
 int parse_flv_file_header(char * header_buf)
 {
-
-
-    
     int header_length;
 
     if(header_buf[0] != 'F' || header_buf[1] != 'L' || header_buf[2] != 'V')
@@ -104,39 +96,7 @@ int parse_flv_tag_header(char * header_buf)
 }
 
 
-int adts_write_frame_header_buf(char * buf,adts_header_info  *adts_header_data)
-{
-    int i = 0;
 
-    if (adts_header_data->adts_buffer_fullness > ADTS_MAX_FRAME_BYTES)
-    {
-        printf("ADTS frame size too large: %u (max %d)\n",adts_header_data->adts_buffer_fullness,ADTS_MAX_FRAME_BYTES);
-        return -1;
-    }
-
-    buf[i++] = adts_header_data->syncword >> 4 & 0xff;
-    buf[i++] = (adts_header_data->syncword & 0xf) << 4 |
-                (adts_header_data->ID &0x1) << 3 | 
-                (adts_header_data->layer &0x3) << 1 | 
-                (adts_header_data->protection_absent &0x1);
-    buf[i++] = (adts_header_data->profile_ObjectType & 0x3) << 6 |
-                (adts_header_data->sampling_frequency_index &0xf) << 2 | 
-                (adts_header_data->private_bit &0x1) << 1 | 
-                (adts_header_data->channel_configuration &0x11)  >> 2;
-    buf[i++] = ((adts_header_data->channel_configuration & 0x3) << 6 |
-                adts_header_data->original_copy << 5 | 
-                adts_header_data->home << 4 | 
-                adts_header_data->copyright_identification_bit << 3 |
-                adts_header_data->copyright_identification_start << 2 |
-                adts_header_data->aac_frame_length >> 11 ) &0xff;
-    buf[i++] = adts_header_data->aac_frame_length >> 3 & 0xff;
-    buf[i++] = (adts_header_data->aac_frame_length << 5 |
-                adts_header_data->adts_buffer_fullness >> 6) & 0xff;
-    buf[i++] = (adts_header_data->adts_buffer_fullness << 2 |
-                adts_header_data->number_of_raw_data_blocks_in_frame ) & 0xff;
-
-    return 0;
-}
 
 int main(int argc,char * argv[])
 {
@@ -146,7 +106,9 @@ int main(int argc,char * argv[])
     char sequence_buf[1024] = "";
     char adts_header_buf[ADTS_HEADER_SIZE];
     adts_header_info  adts_header_data;
+    AudioTagHeader aac_config_data;
     AVCDecoderConfigurationRecord avc_config_data;
+    
 
     char length_a,length_b;
 
@@ -205,47 +167,80 @@ int main(int argc,char * argv[])
     adts_header_data.copyright_identification_start = 0;
     adts_header_data.number_of_raw_data_blocks_in_frame = 0;
 
-    //The dynamic parameters
-    adts_header_data.profile_ObjectType = 1;
-    adts_header_data.sampling_frequency_index = 4;
-    adts_header_data.channel_configuration = 2;
-    adts_header_data.adts_buffer_fullness = 0x7ff;
+    adts_header_data.profile_ObjectType = 1;  // aac_lc
+    adts_header_data.adts_buffer_fullness = 0x7ff; // vbr
 
     while(1)
     {
 
         //read a tag
         if(fread(buffer,FLV_TAG_HEADER_SIZE,1,fp_sourcefile) != 1) {
-        	printf("read inputfile error 003 !\n");
+        	printf("FLV file has been read : hrader !\n");
         	return 0;
         }
 
         ret = parse_flv_tag_header(buffer);
         if(ret < 0)
             return 0;
-        
-        //printf("tag_type = %d\n",flvdemux.flv_tag.tag_type);
-        //printf("date_size = %d\n",flvdemux.flv_tag.date_size);
 
         // read flv tag data
         if(fread(flvdemux.flv_tag.data,flvdemux.flv_tag.date_size,1,fp_sourcefile) != 1) {
-        	printf("read inputfile error 004 !\n");
+        	printf("FLV file has been read : data !\n");
         	return 0;
         }
 
-        if(flvdemux.enable_audio && (flvdemux.flv_tag.tag_type == TAG_AUDIO))
+        i = 0;
+        if(flvdemux.enable_audio && (flvdemux.flv_tag.tag_type == FLV_TAG_TYPE_AUDIO))
         {
-            if(flvdemux.flv_tag.data[1] == 0x01)  // 0x00 Synchronous data, 0x01 raw data
+            aac_config_data.SoundFormat = (flvdemux.flv_tag.data[i] >> 4) & 0xf;
+            aac_config_data.SoundRate = (flvdemux.flv_tag.data[i] >> 2) & 0x3;
+            aac_config_data.SoundSize = (flvdemux.flv_tag.data[i] >> 1) & 0x1;
+            aac_config_data.SoundType = flvdemux.flv_tag.data[i] & 0x1;
+            aac_config_data.AACPacketType = flvdemux.flv_tag.data[++i];
+            
+            if((aac_config_data.SoundFormat == FLV_CODECID_AAC) && (aac_config_data.AACPacketType == 0x01))  // 0x00 Synchronous data, 0x01 raw data
             {
+                // dynamic parameters
+                switch (aac_config_data.SoundRate)
+                {
+                    case FLV_SAMPLERATE_44100HZ:
+                        adts_header_data.sampling_frequency_index = 4;
+                        break;
+                    case FLV_SAMPLERATE_22050HZ:
+                        adts_header_data.sampling_frequency_index = 7;
+                        break;
+                    case FLV_SAMPLERATE_11025HZ:
+                        adts_header_data.sampling_frequency_index = 10;
+                        break;
+                    case FLV_SAMPLERATE_SPECIAL:
+                        adts_header_data.sampling_frequency_index = 11; // 8kHz
+                        break;
+                    default:
+                        adts_header_data.sampling_frequency_index = 4;
+                        break;
+                }
+
+                switch (aac_config_data.SoundType)
+                {
+                    case FLV_MONO:
+                        adts_header_data.channel_configuration = 1;
+                        break;
+                    case FLV_STEREO:
+                        adts_header_data.channel_configuration = 2;
+                        break;
+                    default:
+                        adts_header_data.channel_configuration = 2;
+                        break;
+                }
+
                 adts_header_data.aac_frame_length = flvdemux.flv_tag.date_size + 5;
                 adts_write_frame_header_buf(adts_header_buf,&adts_header_data);
                 fwrite(adts_header_buf,7,1,fp_audio_destfile);
                 fwrite(flvdemux.flv_tag.data+2,flvdemux.flv_tag.date_size-2,1,fp_audio_destfile);
             }
         }
-        else if(flvdemux.enable_video && (flvdemux.flv_tag.tag_type == TAG_VIDEO))
+        else if(flvdemux.enable_video && (flvdemux.flv_tag.tag_type == FLV_TAG_TYPE_VIDEO))
         {
-            i = 0;
             flvdemux.flv_tag.video_data.frame_type = flvdemux.flv_tag.data[i] >> 4;
             flvdemux.flv_tag.video_data.codec_id = flvdemux.flv_tag.data[i++] & 0xF;
             flvdemux.flv_tag.video_data.AVCPacketType = flvdemux.flv_tag.data[i++];
@@ -254,7 +249,7 @@ int main(int argc,char * argv[])
                                                         | (flvdemux.flv_tag.data[i++] & 0xFF);
             // use i++ CompositionTime will error
 
-            if(flvdemux.flv_tag.video_data.codec_id != 0x07 )
+            if(flvdemux.flv_tag.video_data.codec_id != FLV_CODECID_H264 )
             {
                 printf("FLV format video coding is not avc, unable to properly parse !!! \n");
                 return 0;
@@ -322,11 +317,9 @@ int main(int argc,char * argv[])
                 }
             }
         }
-        else if(flvdemux.flv_tag.tag_type == TAG_SCRIPT)
+        else if(flvdemux.flv_tag.tag_type == FLV_TAG_TYPE_META)
         {
-
-
-
+            do_tag_onMetaData(flvdemux.flv_tag.data,flvdemux.flv_tag.date_size);
         }
 
         // check previous tag size
